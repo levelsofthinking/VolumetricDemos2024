@@ -1,0 +1,62 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+#pragma once
+
+// Used to decode frame number from video texture
+
+#include "/Engine/Public/Platform.ush"
+
+Texture2D<float4> InputTexture;
+RWBuffer<uint> FrameNumberBuffer;
+
+// A bit is encoded with a 4x4 block of pixels.
+uint DecodeBit(uint index)
+{
+    // Note: The far right block is left unused.
+    uint rightBound = FrameNumberBuffer[1] - 5;
+    uint bottomBound = FrameNumberBuffer[2] - 1;
+
+    // Bit sampling pattern:
+    // |        |
+    // |     x  |
+    // |  x     |
+    // |        |
+
+    uint xPos0 = rightBound - (4 * index) - 2;
+    uint yPos0 = bottomBound - 1;
+    float3 sample0 = InputTexture.Load(uint3(xPos0, yPos0, 0)).rgb;
+
+    uint xPos1 = rightBound - (4 * index) - 1;
+    uint yPos1 = bottomBound - 2;
+    float3 sample1 = InputTexture.Load(uint3(xPos1, yPos1, 0)).rgb;
+
+    bool bitActive = (sample0.r > 0.5) && (sample0.g > 0.5) && (sample0.b > 0.5) && 
+                     (sample1.r > 0.5) && (sample1.g > 0.5) && (sample1.b > 0.5);
+
+    return bitActive ? 1 : 0;
+}
+
+[numthreads(32, 1, 1)]
+void MainCS(uint3 DT_ID : SV_DispatchThreadID)
+{
+    uint threadID = DT_ID.x;
+
+    if (threadID >= 24)
+    {
+        return;
+    }
+
+    // We only need one thread to clear the number back to zero.
+    if (threadID == 0)
+    {
+        FrameNumberBuffer[0] = 0;
+    }
+
+    // Decode and shift the bit.
+    uint bit = DecodeBit(threadID);
+    uint intValue = (bit << threadID);
+
+    // Add bit shifted int values from each thread into a single frame number.
+    uint valueOut;
+    InterlockedAdd(FrameNumberBuffer[0], intValue, valueOut);
+}

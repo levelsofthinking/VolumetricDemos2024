@@ -1,0 +1,96 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+#pragma once
+
+#include "/Engine/Public/Platform.ush"
+#include "AVVCommon.ush"
+
+uint gVertexCount;
+uint gUVCount;
+uint gTexCoordStride;
+
+// Inputs
+RWBuffer<uint> UVDataBuffer;
+
+// Outputs
+RWBuffer<float2> VertexTexCoordBuffer;
+RWBuffer<float4> VertexTangentBuffer;
+
+void StoreTexCoord(uint index, uint texCoordIdx, float2 uv)
+{
+    VertexTexCoordBuffer[(index * gTexCoordStride) + texCoordIdx] = uv;
+}
+
+void StoreNormal(uint index, float3 normal)
+{
+    float3 unrealNormal = float3(normal.x, normal.z, normal.y);
+
+    VertexTangentBuffer[(index * 2) + 0] = float4(1.0, 0.0, 0.0, 1.0);
+    VertexTangentBuffer[(index * 2) + 1] = float4(unrealNormal.xyz, 1.0);
+}
+
+[numthreads(64, 1, 1)]
+void DecodeSegmentUVs16(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gUVCount)
+    {
+        return;
+    }
+
+    uint idxData = UVDataBuffer[id.x];
+
+    float2 uv;
+    uv.x = decodeFloat16(idxData & 0xFFFF, 0.0f, 1.0f);
+    uv.y = decodeFloat16(idxData >> 16, 0.0f, 1.0f);
+
+    // Write UV out
+    StoreTexCoord(id.x, 0, uv);
+}
+
+[numthreads(64, 1, 1)]
+void DecodeSegmentUVs12Normals888(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (gUVCount / 2))
+    {
+        return;
+    }
+
+    int idx = (int)id.x;
+    uint3 uvNormData;
+    uvNormData.x = UVDataBuffer[(idx * 3) + 0];
+    uvNormData.y = UVDataBuffer[(idx * 3) + 1];
+    uvNormData.z = UVDataBuffer[(idx * 3) + 2];
+
+    float2 uv0;
+    uv0.x = decodeFloat12((uvNormData.x & 0x00000FFF) >> 0, 0.0f, 1.0f);
+    uv0.y = decodeFloat12((uvNormData.x & 0x00FFF000) >> 12, 0.0f, 1.0f);
+
+    float3 normal0;
+    normal0.x = decodeFloat8((uvNormData.x & 0xFF000000) >> 24, -1.0f, 1.0f);
+    normal0.y = decodeFloat8((uvNormData.y & 0x000000FF) >> 0, -1.0f, 1.0f);
+    normal0.z = decodeFloat8((uvNormData.y & 0x0000FF00) >> 8, -1.0f, 1.0f);
+
+    float2 uv1;
+    uv1.x = decodeFloat12((uvNormData.y & 0x0FFF0000) >> 16, 0.0f, 1.0f);
+    uv1.y = decodeFloat12(((uvNormData.y & 0xF0000000) >> 28) + ((uvNormData.z & 0x000000FF) << 4), 0.0f, 1.0f);
+
+    float3 normal1;
+    normal1.x = decodeFloat8((uvNormData.z & 0x0000FF00) >> 8, -1.0f, 1.0f);
+    normal1.y = decodeFloat8((uvNormData.z & 0x00FF0000) >> 16, -1.0f, 1.0f);
+    normal1.z = decodeFloat8((uvNormData.z & 0xFF000000) >> 24, -1.0f, 1.0f);
+
+    // Write data out to uv buffer.
+    uint vert0 = (idx * 2) + 0;
+    if (vert0 < gVertexCount)
+    {
+        StoreTexCoord(vert0, 0, uv0);
+        StoreNormal(vert0, normalize(normal0));
+    }
+
+    uint vert1 = (idx * 2) + 1;
+    if (vert1 < gVertexCount)
+    {
+        StoreTexCoord(vert1, 0, uv1);
+        StoreNormal(vert1, normalize(normal1));
+    }
+}

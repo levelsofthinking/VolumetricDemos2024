@@ -1,0 +1,59 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+#include "/Engine/Public/Platform.ush"
+#include "AVVCommon.ush"
+
+uint gVertexCount; 
+float3 gMotionVectorsMin;
+float3 gMotionVectorsMax;
+
+// Inputs
+RWBuffer<uint4> DecodedVertexBuffer;
+RWBuffer<uint> MotionVectorsDataBuffer;
+
+// Outputs
+RWBuffer<float> VertexPositionBuffer;
+
+float3 LoadDecodedPosition(int vertIndex)
+{
+    uint4 data0 = DecodedVertexBuffer[(vertIndex * 2) + 0];
+    return asfloat(data0.xyz);
+}
+
+void StoreVertexPosition(uint index, float3 position)
+{
+    // Convert to unreal scaling and coordinate space.
+    float3 finalPos = float3(position.x * 100.0, position.z * 100.0, position.y * 100.0);
+
+    // Vertex Position
+    VertexPositionBuffer[(index * 3) + 0] = finalPos.x;
+    VertexPositionBuffer[(index * 3) + 1] = finalPos.y;
+    VertexPositionBuffer[(index * 3) + 2] = finalPos.z;
+}
+
+[numthreads(64, 1, 1)]
+void DecodeSegmentMotionVectors(uint3 id : SV_DispatchThreadID)
+{
+    // Thread for each vertex.
+    if (id.x >= gVertexCount)
+    {
+        return;
+    }
+
+    int idx = (int)id.x;
+
+    // Load keyframe position
+    float3 position = LoadDecodedPosition(idx);
+
+    // Load motion vector
+    uint motionVecData = MotionVectorsDataBuffer[idx];
+
+    float3 motionVec;
+    motionVec.x = decodeFloat10((motionVecData >> 0)  & 0x3FF, gMotionVectorsMin.x, gMotionVectorsMax.x);
+    motionVec.y = decodeFloat12((motionVecData >> 10) & 0xFFF, gMotionVectorsMin.y, gMotionVectorsMax.y);
+    motionVec.z = decodeFloat10((motionVecData >> 22) & 0x3FF, gMotionVectorsMin.z, gMotionVectorsMax.z);
+
+    // Store transformed position back into the mesh vertex buffer. The animation
+    // shader will run after this and put this position into the previous position buffer.
+    StoreVertexPosition(idx, position - motionVec);
+}

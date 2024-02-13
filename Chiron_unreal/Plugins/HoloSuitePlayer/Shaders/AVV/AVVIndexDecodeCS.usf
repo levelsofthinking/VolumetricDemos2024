@@ -1,0 +1,60 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+#include "/Engine/Public/Platform.ush"
+#include "AVVCommon.ush"
+
+uint gCompactIndexCount;
+uint gIndexCount;
+uint gMaxIndexCount;
+
+// Inputs
+RWBuffer<uint> IndexDataBuffer;
+
+// Outputs
+RWBuffer<uint> IndexBuffer;
+
+void StoreTriangle(uint index, uint3 tri)
+{
+    IndexBuffer[(index * 3) + 0] = tri.x;
+    IndexBuffer[(index * 3) + 1] = tri.y;
+    IndexBuffer[(index * 3) + 2] = tri.z;
+}
+
+[numthreads(64, 1, 1)]
+void DecodeSegmentTris16CS(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gCompactIndexCount)
+    {
+        return;
+    }
+
+    uint idxData = IndexDataBuffer[id.x];
+    IndexBuffer[(id.x * 2) + 0] = idxData & 0xFFFF;
+    IndexBuffer[(id.x * 2) + 1] = idxData >> 16;
+}
+
+[numthreads(64, 1, 1)]
+void DecodeSegmentTris32CS(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gIndexCount)
+    {
+        return;
+    }
+
+    uint idxData = IndexDataBuffer[id.x];
+    IndexBuffer[id.x] = idxData;
+}
+
+[numthreads(64, 1, 1)]
+void ClearUnusedTrisCS(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x > 0)
+    {
+        return;
+    }
+
+    for (int i = gIndexCount; i < gMaxIndexCount; ++i)
+    {
+        IndexBuffer[i] = 0;
+    }
+}

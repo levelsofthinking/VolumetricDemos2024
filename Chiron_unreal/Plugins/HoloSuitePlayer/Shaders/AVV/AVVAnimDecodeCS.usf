@@ -1,0 +1,155 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+#pragma once
+
+#include "/Engine/Public/Platform.ush"
+#include "AVVCommon.ush"
+
+uint gVertexCount; 
+uint gIndexCount;  
+uint gBoneCount;
+float3 gAABBMin;
+float3 gAABBMax;
+
+// Inputs
+RWBuffer<uint4> DecodedVertexBuffer;
+RWBuffer<uint4> FrameSSDRDataBuffer;
+RWBuffer<uint> FrameDeltaDataBuffer;
+
+// Outputs
+RWBuffer<float> VertexPositionBuffer;
+RWBuffer<float> VertexPrevPositionBuffer;
+
+DecodedVertex LoadDecodedVertex(int vertIndex)
+{
+    uint4 data0 = DecodedVertexBuffer[(vertIndex * 2) + 0];
+    uint4 data1 = DecodedVertexBuffer[(vertIndex * 2) + 1];
+
+    DecodedVertex vert;
+
+    // Vertex Position
+    vert.position = asfloat(data0.xyz);
+
+    // SSDR Weights
+    vert.ssdrWeights = asfloat(uint4(data0.w, data1.xyz));
+
+    // SSDR Indices
+    vert.ssdrIndices = data1.w;
+
+    return vert;
+}
+
+float3 LoadDecodedPosition(int vertIndex)
+{
+    uint4 data0 = DecodedVertexBuffer[(vertIndex * 2) + 0];
+    return asfloat(data0.xyz);
+}
+
+void StoreVertexPosition(uint index, float3 position)
+{
+    // Convert to unreal scaling and coordinate space.
+    float3 finalPos = float3(position.x * 100.0, position.z * 100.0, position.y * 100.0);
+    VertexPositionBuffer[(index * 3) + 0] = finalPos.x;
+    VertexPositionBuffer[(index * 3) + 1] = finalPos.y;
+    VertexPositionBuffer[(index * 3) + 2] = finalPos.z;
+}
+
+float4x4 GetBoneMatrix(int boneIndex)
+{
+    float4x4 mat;
+
+    mat[0] = asfloat(FrameSSDRDataBuffer[(boneIndex * 4) + 0]);
+    mat[1] = asfloat(FrameSSDRDataBuffer[(boneIndex * 4) + 1]);
+    mat[2] = asfloat(FrameSSDRDataBuffer[(boneIndex * 4) + 2]);
+    mat[3] = float4(0, 0, 0, 1);
+
+    return mat;
+}
+
+[numthreads(64, 1, 1)]
+void DecodeFrameAnimNone(uint3 id : SV_DispatchThreadID)
+{
+    // Thread for each vertex.
+    if (id.x >= gVertexCount)
+    {
+        return;
+    }
+
+    // Store Previous Position
+    VertexPrevPositionBuffer[(id.x * 3) + 0] = VertexPositionBuffer[(id.x * 3) + 0];
+    VertexPrevPositionBuffer[(id.x * 3) + 1] = VertexPositionBuffer[(id.x * 3) + 1];
+    VertexPrevPositionBuffer[(id.x * 3) + 2] = VertexPositionBuffer[(id.x * 3) + 2];
+
+    uint vertIndex = id.x;
+
+    // Read from decoded vert buffer write into real vert buffer
+    float3 vertPosition = LoadDecodedPosition(id.x);
+    StoreVertexPosition(vertIndex, vertPosition);
+}
+
+[numthreads(64, 1, 1)]
+void DecodeFrameAnimSSDR(uint3 id : SV_DispatchThreadID)
+{
+    // Thread for each vertex.
+    if (id.x >= gVertexCount)
+    {
+        return;
+    }
+
+    // Store Previous Position
+    VertexPrevPositionBuffer[(id.x * 3) + 0] = VertexPositionBuffer[(id.x * 3) + 0];
+    VertexPrevPositionBuffer[(id.x * 3) + 1] = VertexPositionBuffer[(id.x * 3) + 1];
+    VertexPrevPositionBuffer[(id.x * 3) + 2] = VertexPositionBuffer[(id.x * 3) + 2];
+
+    uint vertIndex = id.x;
+
+    // Compute SSDR
+    DecodedVertex inputVert = LoadDecodedVertex(vertIndex);
+    float4 oldPos = float4(inputVert.position, 1.0);
+
+    int index = (inputVert.ssdrIndices & 0x000000FF);
+    float4x4 boneMatrix = GetBoneMatrix(index);
+    float4 newPos = mul(boneMatrix, oldPos) * inputVert.ssdrWeights.x;
+
+    index = (inputVert.ssdrIndices & 0x0000FF00) >> 8;
+    boneMatrix = GetBoneMatrix(index);
+    newPos = mul(boneMatrix, oldPos) * inputVert.ssdrWeights.y + newPos;
+
+    index = (inputVert.ssdrIndices & 0x00FF0000) >> 16;
+    boneMatrix = GetBoneMatrix(index);
+    newPos = mul(boneMatrix, oldPos) * inputVert.ssdrWeights.z + newPos;
+
+    index = (inputVert.ssdrIndices & 0xFF000000) >> 24;
+    boneMatrix = GetBoneMatrix(index);
+    newPos = mul(boneMatrix, oldPos) * inputVert.ssdrWeights.w + newPos;
+
+    StoreVertexPosition(vertIndex, newPos.xyz);
+}
+
+[numthreads(64, 1, 1)]
+void DecodeFrameAnimDelta(uint3 id : SV_DispatchThreadID)
+{
+    // Thread for each vertex.
+    if (id.x >= gVertexCount)
+    {
+        return;
+    }
+
+    // Store Previous Position
+    VertexPrevPositionBuffer[(id.x * 3) + 0] = VertexPositionBuffer[(id.x * 3) + 0];
+    VertexPrevPositionBuffer[(id.x * 3) + 1] = VertexPositionBuffer[(id.x * 3) + 1];
+    VertexPrevPositionBuffer[(id.x * 3) + 2] = VertexPositionBuffer[(id.x * 3) + 2];
+
+    float3 originalPosition = LoadDecodedPosition(id.x);
+
+    // Load delta
+    uint deltaPosData = FrameDeltaDataBuffer[id.x];
+
+    float3 delta;
+    delta.x = decodeFloat10((deltaPosData >> 0)  & 0x3FF, gAABBMin.x, gAABBMax.x);
+    delta.y = decodeFloat12((deltaPosData >> 10) & 0xFFF, gAABBMin.y, gAABBMax.y);
+    delta.z = decodeFloat10((deltaPosData >> 22) & 0x3FF, gAABBMin.z, gAABBMax.z);
+
+    float3 finalVertPos = originalPosition + delta;
+    StoreVertexPosition(id.x, finalVertPos);
+}

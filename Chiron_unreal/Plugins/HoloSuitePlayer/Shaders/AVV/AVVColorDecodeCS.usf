@@ -1,0 +1,89 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+#include "/Engine/Public/Platform.ush"
+#include "AVVCommon.ush"
+
+uint gVertexCount;
+uint gColorCount;  
+
+// Inputs
+RWBuffer<uint> ColorDataBuffer;
+
+// Outputs
+RWBuffer<UNORM float4> VertexColorBuffer;
+RWBuffer<float4> VertexTangentBuffer;
+
+[numthreads(64, 1, 1)]
+void DecodeFrameColorRGB565(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (gColorCount / 2u))
+    {
+        return;
+    }
+
+    int idx = id.x;
+
+    // Each read contains two colors.
+    uint data = ColorDataBuffer[idx];
+    float3 color0, color1;
+
+    uint colorData0 = data & 0xFFFF;
+    uint colorData1 = data >> 16;
+
+    color0.r = (colorData0 >> 11) << 3;
+    color0.g = ((colorData0 >> 5) << 2) & 0xFF;
+    color0.b = (colorData0 << 3) & 0xFF;
+    color0 = color0 / 255.0;
+
+    color1.r = (colorData1 >> 11) << 3;
+    color1.g = ((colorData1 >> 5) << 2) & 0xFF;
+    color1.b = (colorData1 << 3) & 0xFF;
+    color1 = color1 / 255.0;
+
+    uint vert0 = (idx * 2) + 0;
+    if (vert0 < gVertexCount)
+    {
+        VertexColorBuffer[(idx * 2) + 0] = float4(color0.rgb, 1.0) FMANUALFETCH_COLOR_COMPONENT_SWIZZLE;
+    }
+
+    uint vert1 = (idx * 2) + 1;
+    if (vert1 < gVertexCount)
+    {
+        VertexColorBuffer[(idx * 2) + 1] = float4(color1.rgb, 1.0) FMANUALFETCH_COLOR_COMPONENT_SWIZZLE;
+    }
+}
+
+[numthreads(64, 1, 1)]
+void DecodeFrameColorRGB565NormalsOct16(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gColorCount)
+    {
+        return;
+    }
+
+    int idx = id.x;
+
+    // Each read a color and normal.
+    uint data = ColorDataBuffer[idx];
+    uint colorData = data & 0xFFFF;
+    uint normalData = data >> 16;
+
+    // Decode Color
+    float3 color;
+    color.r = (colorData >> 11) << 3;
+    color.g = ((colorData >> 5) << 2) & 0xFF;
+    color.b = (colorData << 3) & 0xFF;
+    color = color / 255.0;
+
+    // Decode Normal
+    float2 oct16 = float2((normalData & 0xFF) / 255.0, (normalData >> 8) / 255.0);
+    float3 normal = decodeOct16(oct16);
+
+    // Output Color
+    VertexColorBuffer[idx] = float4(color.rgb, 1.0) FMANUALFETCH_COLOR_COMPONENT_SWIZZLE;
+
+    // Output Normal
+    // Note: swizzle into Unreal.
+    VertexTangentBuffer[(idx * 2) + 0] = float4(1.0, 0.0, 0.0, 1.0);
+    VertexTangentBuffer[(idx * 2) + 1] = float4(normal.xzy, 1.0);
+}

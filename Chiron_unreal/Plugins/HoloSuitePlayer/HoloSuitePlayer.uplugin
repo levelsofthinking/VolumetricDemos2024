@@ -1,0 +1,45 @@
+{
+	"FileVersion": 3,
+	"Version": 4,
+	"VersionName": "4.1.1",
+	"FriendlyName": "HoloSuite Player",
+	"Description": "Playback of Arcturus volumetric content.",
+	"Category": "Media",
+	"CreatedBy": "Arcturus Studios",
+	"CreatedByURL": "",
+	"DocsURL": "https://arcturus.studio/docs/",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EngineVersion": "5.3.0",
+	"CanContainContent": true,
+	"Installed": true,
+	"Modules": [
+		{
+			"Name": "HoloSuitePlayer",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": [
+				"Win64",
+				"Android"
+			]
+		},
+		{
+			"Name": "HoloMesh",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": [
+				"Win64",
+				"Android"
+			]
+		},
+		{
+			"Name": "HoloSuitePlayerEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Android"
+			]
+		}
+	]
+}

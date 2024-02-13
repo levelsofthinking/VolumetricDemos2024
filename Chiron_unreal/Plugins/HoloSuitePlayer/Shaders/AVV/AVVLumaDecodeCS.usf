@@ -1,0 +1,88 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+#include "/Engine/Public/Platform.ush"
+#include "AVVCommon.ush"
+
+uint gBlockOffset;  // How many blocks into the buffer this dispatch should start from.
+uint gBlockCount;   // Number blocks total.
+
+// Inputs
+RWBuffer<uint> TextureBlockDataBuffer;
+RWBuffer<uint2> LumaBlockDataBuffer;
+
+// Outputs
+RWTexture2D<float> LumaTextureOut;
+RWTexture2D<uint2> BC4StagingTextureOut;
+RWTexture2D<float> MaskTextureOut;
+
+// Decodes a texture block and then decodes the matching BC4 block
+// directly into the luma texture.
+[numthreads(64, 1, 1)]
+void DecodeTextureBlockBC4(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gBlockCount)
+    {
+        return;
+    }
+
+    int blockIndex = gBlockOffset + id.x;
+
+    // Decode block x,y
+    uint textureBlockData = TextureBlockDataBuffer[blockIndex];
+    uint blockX = textureBlockData & 0xFFFF;
+    uint blockY = textureBlockData >> 16;
+
+    // Read BC4 block
+    uint2 blockData = LumaBlockDataBuffer[blockIndex].xy;
+    uint lumaMin = (blockData.x >> 0) & 0xFF;
+    uint lumaMax = (blockData.x >> 8) & 0xFF;
+
+    // Generate final luma values
+    float finalLumaValues[16];
+    decodeBC4Block(lumaMin, lumaMax, blockData, finalLumaValues);
+
+    MaskTextureOut[uint2(blockX, blockY)] = 1.0;
+
+    // Write block out to luma atlas
+    uint lumaIdx = 0;
+    for (int y = 0; y < 4; ++y)
+    {
+        for (int x = 0; x < 4; ++x)
+        {
+            lumaIdx = (y * 4) + x;
+
+            float lumaOut = finalLumaValues[lumaIdx];
+
+            uint pixelX = (blockX * 4) + x;
+            uint pixelY = (blockY * 4) + y;
+
+            LumaTextureOut[uint2(pixelX, pixelY)] = lumaOut;
+        }
+    }
+}
+
+// Copies a BC4 texture block into a target texture, no decoding is performed.
+[numthreads(64, 1, 1)]
+void CopyTextureBlockBC4(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gBlockCount)
+    {
+        return;
+    }
+
+    int blockIndex = gBlockOffset + id.x;
+
+    // Decode block x,y
+    uint textureBlockData = TextureBlockDataBuffer[blockIndex];
+    uint blockX = textureBlockData & 0xFFFF;
+    uint blockY = textureBlockData >> 16;
+
+    // Read BC4 block
+    uint2 blockData = LumaBlockDataBuffer[blockIndex].xy;
+
+    // Write mask for interpolation
+    MaskTextureOut[uint2(blockX, blockY)] = 1.0;
+    
+    // Write out block data
+    BC4StagingTextureOut[uint2(blockX, blockY)] = blockData;
+}

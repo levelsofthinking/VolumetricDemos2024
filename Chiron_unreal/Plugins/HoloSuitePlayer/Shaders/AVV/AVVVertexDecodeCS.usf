@@ -1,0 +1,114 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+#pragma once
+
+#include "/Engine/Public/Platform.ush"
+#include "AVVCommon.ush"
+
+uint gVertexCount; 
+uint gCompactVertexCount;
+float3 gAABBMin;
+float3 gAABBMax;
+
+// Inputs
+RWBuffer<uint> VertexDataBuffer;
+RWBuffer<uint4> VertexSkinDataBuffer;
+RWBuffer<uint> VertexWriteTable;
+
+// Outputs
+RWBuffer<uint4> DecodedVertexBuffer;
+
+DecodedVertex DecodeSkinVertex(int index)
+{
+    uint4 data = VertexSkinDataBuffer[index];
+
+    DecodedVertex vert;
+
+    vert.position.x = decodeFloat16(data.x & 0xFFFF, gAABBMin.x, gAABBMax.x);
+    vert.position.y = decodeFloat16(data.x >> 16,    gAABBMin.y, gAABBMax.y);
+    vert.position.z = decodeFloat16(data.y & 0xFFFF, gAABBMin.z, gAABBMax.z);
+
+    vert.ssdrWeights.x = decodeFloat16(data.y >> 16,    0.0, 1.0);
+    vert.ssdrWeights.y = decodeFloat16(data.z & 0xFFFF, 0.0, 1.0);
+    vert.ssdrWeights.z = decodeFloat16(data.z >> 16,    0.0, 1.0);
+    vert.ssdrWeights.w = 1.0 - (vert.ssdrWeights.x + vert.ssdrWeights.y + vert.ssdrWeights.z);
+
+    if (vert.ssdrWeights.w <= (3.0 / 2046.0f))
+    {
+        vert.ssdrWeights.x = vert.ssdrWeights.x + vert.ssdrWeights.w;
+        vert.ssdrWeights.w = 0.0f;
+    }
+
+    vert.ssdrIndices = data.w;
+
+    return vert;
+}
+
+void StoreDecodedVertex(int vertIndex, DecodedVertex v)
+{
+    DecodedVertexBuffer[(vertIndex * 2) + 0] = uint4(asuint(v.position.xyz), asuint(v.ssdrWeights.x));
+    DecodedVertexBuffer[(vertIndex * 2) + 1] = uint4(asuint(v.ssdrWeights.yzw), asuint(v.ssdrIndices));
+}
+
+[numthreads(64, 1, 1)]
+void DecodeSegmentPos16(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x > (gVertexCount / 2u))
+    {
+        return;
+    }
+
+    // Each vertex pair is 12 bytes.
+    uint3 data;
+    data.x = VertexDataBuffer[(id.x * 3) + 0];
+    data.y = VertexDataBuffer[(id.x * 3) + 1];
+    data.z = VertexDataBuffer[(id.x * 3) + 2];
+
+    uint vert0Idx = (id.x * 2) + 0;
+    uint vert1Idx = (id.x * 2) + 1;
+
+    // Vertex 0
+    DecodedVertex vert0;
+    vert0.position.x = decodeFloat16(data.x & 0xFFFF, gAABBMin.x, gAABBMax.x);
+    vert0.position.y = decodeFloat16(data.x >> 16,    gAABBMin.y, gAABBMax.y);
+    vert0.position.z = decodeFloat16(data.y & 0xFFFF, gAABBMin.z, gAABBMax.z);
+    vert0.ssdrWeights = float4(0, 0, 0, 0);
+    vert0.ssdrIndices = 0;
+    StoreDecodedVertex(vert0Idx, vert0);
+
+    // Vertex 1
+    DecodedVertex vert1;
+    vert1.position.x = decodeFloat16(data.y >> 16,    gAABBMin.x, gAABBMax.x);
+    vert1.position.y = decodeFloat16(data.z & 0xFFFF, gAABBMin.y, gAABBMax.y);
+    vert1.position.z = decodeFloat16(data.z >> 16,    gAABBMin.z, gAABBMax.z);
+    vert1.ssdrWeights = float4(0, 0, 0, 0);
+    vert1.ssdrIndices = 0;
+    StoreDecodedVertex(vert1Idx, vert1);
+}
+
+[numthreads(64, 1, 1)]
+void DecodeSegmentPosSkinExpand128(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gCompactVertexCount)
+    {
+        return;
+    }
+
+    uint vertexWriteData = VertexWriteTable[id.x];
+    uint vertexWriteIdx = (vertexWriteData & 0x00FFFFFF);
+    uint expansionCount = (vertexWriteData >> 24);
+
+    if ((vertexWriteIdx + expansionCount) > gVertexCount)
+    {
+        return;
+    }
+
+    DecodedVertex v = DecodeSkinVertex(id.x);
+
+    uint vertexIndex = vertexWriteIdx;
+    for (int i = 0; i < expansionCount; ++i)
+    {
+        StoreDecodedVertex(vertexIndex, v);
+        vertexIndex++;
+    }
+}

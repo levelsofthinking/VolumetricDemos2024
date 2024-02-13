@@ -1,0 +1,49 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+// This can be included in Material Expression Custom nodes with:
+// #include "/HoloSuitePlayer/AVV/AVVMaterialFunctions.ush"
+
+struct AVVMaterialFunctions
+{
+    float selectBestMip(float val0, float val1, float val2)
+    {
+        float v1 = (1.0 - val0) * val1 * 1.0;
+        float v2 = (1.0 - val0) * (1.0 - val1) * val2 * 2.0;
+        return round(v1 + v2);
+    }
+
+    float sampleMask(Texture2D inputMaskTex, SamplerState inputMaskSampler, float mask, float2 coord, float2 size, float mip)
+    {
+        if (mask < 1.0)
+        {
+            return 0.0;
+        }
+
+        // Determine which quadrant we're sampling from.
+        float2 texCoord = (coord * size);
+        float2 texPos = floor(texCoord);
+        float2 f = frac(texCoord) - 0.5;
+        float2 quadrant = sign(f);
+
+        // Apply a half-pixel offset to correct neighbor sampling positions.
+        texPos += 0.5 / size;
+
+        // Sample appropriate neighbors.
+        float neighborX = Texture2DSampleLevel(inputMaskTex, inputMaskSampler, (texPos + float2(quadrant.x, 0.0)) / size, mip).r;
+        float neighborY = Texture2DSampleLevel(inputMaskTex, inputMaskSampler, (texPos + float2(0.0, quadrant.y)) / size, mip).r;
+        float neighborXY = Texture2DSampleLevel(inputMaskTex, inputMaskSampler, (texPos + quadrant) / size, mip).r;
+
+        // Clamp masking area based on neighbors.
+        const float limit = 0.5 * (3.0 / 4.0);
+        if ((neighborX < 1.0 && abs(f.x) > limit) ||
+            (neighborY < 1.0 && abs(f.y) > limit) ||
+            (neighborXY < 1.0 && abs(f.x) > limit && abs(f.y) > limit))
+        {
+            return 0.0;
+        }
+
+        return mask;
+    }
+};
+
+AVVMaterialFunctions AVV;

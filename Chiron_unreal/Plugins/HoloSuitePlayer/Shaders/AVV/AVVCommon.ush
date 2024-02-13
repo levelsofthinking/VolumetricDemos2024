@@ -1,0 +1,108 @@
+// Copyright 2023 Arcturus Studios Holdings, Inc. All Rights Reserved.
+
+// 32 bytes
+struct DecodedVertex
+{
+    float3 position;    // 12
+    float4 ssdrWeights; // 16
+    uint ssdrIndices;   // 4
+};
+
+float decodeFloat8(uint x, float boundsMin, float boundsMax)
+{
+    float zeroOne = (float)x / 255.0;
+    return (zeroOne * (boundsMax - boundsMin)) + boundsMin;
+}
+
+float decodeFloat10(uint x, float boundsMin, float boundsMax)
+{
+    float zeroOne = (float)x / 1023.0;
+    return (zeroOne * (boundsMax - boundsMin)) + boundsMin;
+}
+
+float decodeFloat12(uint x, float boundsMin, float boundsMax)
+{
+    float zeroOne = (float)x / 4095.0;
+    return (zeroOne * (boundsMax - boundsMin)) + boundsMin;
+}
+
+uint encodeFloat16(float x, float boundsMin, float boundsMax)
+{
+    float zeroOne = clamp((x - boundsMin) / (boundsMax - boundsMin), 0.0, 1.0);
+    return 65535 * zeroOne;
+}
+
+float decodeFloat16(uint x, float boundsMin, float boundsMax)
+{
+    float zeroOne = (float)x / 65535.0;
+    return (zeroOne * (boundsMax - boundsMin)) + boundsMin;
+}
+
+float3 decodeOct16(float2 f)
+{
+    f = f * 2.0 - 1.0;
+
+    // https://twitter.com/Stubbesaurus/status/937994790553227264
+    float3 n = float3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    float2 t = saturate(-n.z);
+
+    #if HLSL_2021
+        n.xy += select(n.xy >= 0.0, -t, t);
+    #else
+        n.xy += n.xy >= 0.0 ? -t : t;
+    #endif
+
+    return normalize(n);
+}
+
+float3 computeNormal(float3 v0, float3 v1, float3 v2)
+{
+    float3 A = v1 - v0;
+    float3 B = v2 - v0;
+    return normalize(cross(A, B));
+}
+
+// https://fgiesen.wordpress.com/2021/10/04/gpu-bcn-decoding/
+void decodeBC4Block(uint lumaMin, uint lumaMax, uint2 blockData, out float decodedValuesOut[16])
+{
+    uint bc4Table[8];
+    bc4Table[0] = (lumaMin << 8) | lumaMin;
+    bc4Table[1] = (lumaMax << 8) | lumaMin;
+
+    int diff = lumaMax - lumaMin;
+
+    if (bc4Table[0] > bc4Table[1])
+    {
+        // 6 interpolated colors
+        bc4Table[2] = bc4Table[0] + 36 * (diff);        // 1/7
+        bc4Table[3] = bc4Table[0] + 36 * (diff << 1);   // 2/7
+        bc4Table[4] = bc4Table[1] - 36 * (diff << 2);   // 3/7
+        bc4Table[5] = bc4Table[0] + 36 * (diff << 2);   // 4/7
+        bc4Table[6] = bc4Table[1] - 36 * (diff << 1);   // 5/7
+        bc4Table[7] = bc4Table[1] - 36 * (diff);        // 6/7
+    }
+    else
+    {
+        // 4 interpolated colors
+        bc4Table[2] = bc4Table[0] + 48 * (diff);        // 1/5
+        bc4Table[3] = bc4Table[0] + 48 * (diff << 1);   // 2/5
+        bc4Table[4] = bc4Table[1] - 48 * (diff << 1);   // 3/5
+        bc4Table[5] = bc4Table[1] - 48 * (diff);        // 4/5
+        bc4Table[6] = 0; 
+        bc4Table[7] = 65535; 
+    }
+
+    uint firstRow = (blockData.x >> 16) | ((blockData.y & 0xFF) << 16);
+    for (uint i = 0; i < 8; ++i)
+    {
+        uint idx = firstRow >> (i * 3);
+        decodedValuesOut[i] = clamp(bc4Table[idx & 0x07] / 65535.0, 0.0, 1.0);
+    }
+
+    uint secondRow = (blockData.y >> 8);
+    for (uint j = 0; j < 8; ++j)
+    {
+        uint idx = secondRow >> (j * 3);
+        decodedValuesOut[j + 8] = clamp(bc4Table[idx & 0x07] / 65535.0, 0.0, 1.0);
+    }
+}
